@@ -1,46 +1,63 @@
-
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState, type FormEvent } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
+  const callbackError =
+    searchParams.get("error") === "confirmation_failed"
+      ? "The confirmation link is invalid or expired. Request a new confirmation email."
+      : "";
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
     setLoading(true);
 
-    const supabase = createClient();
+    try {
+      const supabase = createClient();
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+      const { error: signInError } =
+        await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
 
-    setLoading(false);
+      if (signInError) {
+        setError(
+          signInError.message === "Invalid login credentials"
+            ? "Invalid email or password. If you recently registered, confirm your email first."
+            : signInError.message
+        );
+        return;
+      }
 
-    if (error) {
-      setError(error.message);
-      return;
+      router.replace("/");
+      router.refresh();
+    } catch {
+      setError(
+        "Unable to sign in right now. Check your connection and try again."
+      );
+    } finally {
+      setLoading(false);
     }
-
-    router.replace("/");
-    router.refresh();
   }
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-12">
       <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
         <p className="text-sm font-semibold uppercase tracking-widest text-emerald-700">
-          Harvest & Stories
+          Harvest &amp; Stories
         </p>
 
         <h1 className="mt-4 text-3xl font-bold text-slate-900">
@@ -53,7 +70,10 @@ export default function LoginPage() {
 
         <form onSubmit={handleLogin} className="mt-8 space-y-5">
           <div>
-            <label htmlFor="email" className="mb-2 block text-sm font-medium text-slate-700">
+            <label
+              htmlFor="email"
+              className="mb-2 block text-sm font-medium text-slate-700"
+            >
               Email address
             </label>
             <input
@@ -69,7 +89,10 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label htmlFor="password" className="mb-2 block text-sm font-medium text-slate-700">
+            <label
+              htmlFor="password"
+              className="mb-2 block text-sm font-medium text-slate-700"
+            >
               Password
             </label>
             <input
@@ -84,9 +107,12 @@ export default function LoginPage() {
             />
           </div>
 
-          {error && (
-            <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
-              {error}
+          {(error || callbackError) && (
+            <p
+              role="alert"
+              className="rounded-lg bg-red-50 p-3 text-sm text-red-700"
+            >
+              {error || callbackError}
             </p>
           )}
 
@@ -99,13 +125,39 @@ export default function LoginPage() {
           </button>
         </form>
 
+        <p className="mt-4 text-center text-sm">
+          <Link
+            href="/forgot-password"
+            className="font-semibold text-emerald-700 hover:underline"
+          >
+            Forgot your password?
+          </Link>
+        </p>
+
         <p className="mt-6 text-center text-sm text-slate-600">
           Need an account?{" "}
-          <Link href="/signup" className="font-semibold text-emerald-700 hover:underline">
+          <Link
+            href="/signup"
+            className="font-semibold text-emerald-700 hover:underline"
+          >
             Create one
           </Link>
         </p>
       </section>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+          <p className="text-sm text-slate-600">Loading login...</p>
+        </div>
+      }
+    >
+      <LoginForm />
+    </Suspense>
   );
 }

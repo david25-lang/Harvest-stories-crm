@@ -1,65 +1,252 @@
-
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import WorkspacePage from "../components/WorkspacePage";
+import { createClient } from "@/lib/supabase/client";
+
+type Contact = {
+  id: string;
+  full_name: string;
+  organization: string | null;
+};
+
+type Opportunity = {
+  id: string;
+  title: string;
+  contact_id: string | null;
+};
+
+type FollowUpRow = {
+  id: string;
+  contact_id: string | null;
+  opportunity_id: string | null;
+  title: string;
+  description: string | null;
+  due_at: string | null;
+  priority: string | null;
+  status: string | null;
+};
 
 type FollowUp = {
-  id: number;
+  id: string;
   title: string;
+  contactId: string | null;
   contact: string;
+  opportunityId: string | null;
+  opportunity: string;
+  description: string;
   type: string;
   dueDate: string;
   priority: string;
+  status: string;
   completed: boolean;
 };
 
-const initialFollowUps: FollowUp[] = [
-  {
-    id: 1,
-    title: "Discuss produce supply",
-    contact: "Amara Okafor",
-    type: "Call",
-    dueDate: "2026-10-26",
-    priority: "High",
-    completed: false,
-  },
-  {
-    id: 2,
-    title: "Review book proposal",
-    contact: "Daniel Mensah",
-    type: "Meeting",
-    dueDate: "2026-10-27",
-    priority: "Medium",
-    completed: false,
-  },
-  {
-    id: 3,
-    title: "Send campaign draft",
-    contact: "Sarah Adeyemi",
-    type: "Email",
-    dueDate: "2026-10-28",
-    priority: "High",
-    completed: false,
-  },
-];
+const supabase = createClient();
+
+function formatDate(value: string | null) {
+  if (!value) return "No date";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleDateString("en-NG", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
 
 export default function FollowUpsPage() {
-  const [items, setItems] = useState(initialFollowUps);
+  const [items, setItems] = useState<FollowUp[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All");
+
   const [showForm, setShowForm] = useState(false);
+
   const [title, setTitle] = useState("");
-  const [contact, setContact] = useState("");
+  const [contactId, setContactId] = useState("");
+  const [opportunityId, setOpportunityId] = useState("");
   const [type, setType] = useState("Call");
+  const [description, setDescription] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [priority, setPriority] = useState("Medium");
 
+  const loadFollowUps = useCallback(async () => {
+    setLoading(true);
+    setError("");
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      setError("You must be logged in to view your follow-ups.");
+      setLoading(false);
+      return;
+    }
+
+    const [followUpsResult, contactsResult, opportunitiesResult] =
+      await Promise.all([
+        supabase
+          .from("follow_ups")
+          .select(
+            "id, contact_id, opportunity_id, title, description, due_at, priority, status"
+          )
+          .eq("user_id", user.id)
+          .order("due_at", { ascending: true }),
+
+        supabase
+          .from("contacts")
+          .select("id, full_name, organization")
+          .eq("user_id", user.id)
+          .order("full_name", { ascending: true }),
+
+        supabase
+          .from("opportunities")
+          .select("id, title, contact_id")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false }),
+      ]);
+
+    if (followUpsResult.error) {
+      setError(`Could not load follow-ups: ${followUpsResult.error.message}`);
+      setLoading(false);
+      return;
+    }
+
+    if (contactsResult.error) {
+      setError(`Could not load contacts: ${contactsResult.error.message}`);
+      setLoading(false);
+      return;
+    }
+
+    if (opportunitiesResult.error) {
+      setError(
+        `Could not load opportunities: ${opportunitiesResult.error.message}`
+      );
+      setLoading(false);
+      return;
+    }
+
+    const loadedContacts = (contactsResult.data ?? []) as Contact[];
+    const loadedOpportunities = (opportunitiesResult.data ??
+      []) as Opportunity[];
+
+    const contactMap = new Map(
+      loadedContacts.map((contact) => [contact.id, contact])
+    );
+
+    const opportunityMap = new Map(
+      loadedOpportunities.map((opportunity) => [opportunity.id, opportunity])
+    );
+
+    const mappedFollowUps: FollowUp[] = (
+      (followUpsResult.data ?? []) as FollowUpRow[]
+    ).map((item) => {
+      const contact = item.contact_id
+        ? contactMap.get(item.contact_id)
+        : undefined;
+
+      const opportunity = item.opportunity_id
+        ? opportunityMap.get(item.opportunity_id)
+        : undefined;
+
+      const status = item.status || "Pending";
+
+      return {
+        id: item.id,
+        title: item.title,
+        contactId: item.contact_id,
+        contact: contact?.full_name || "No contact",
+        opportunityId: item.opportunity_id,
+        opportunity: opportunity?.title || "",
+        description: item.description || "",
+        type: item.description?.startsWith("[Type:")
+          ? item.description.match(/^\[Type:\s*(.*?)\]/)?.[1] || "Other"
+          : "Other",
+        dueDate: item.due_at || "",
+        priority: item.priority || "Medium",
+        status,
+        completed: status.toLowerCase() === "completed",
+      };
+    });
+
+    setContacts(loadedContacts);
+    setOpportunities(loadedOpportunities);
+    setItems(mappedFollowUps);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    // The initial request intentionally updates loading and error state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadFollowUps();
+  }, [loadFollowUps]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | undefined;
+
+    async function subscribeToFollowUpChanges() {
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
+
+      if (cancelled || error || !user) return;
+
+      channel = supabase
+        .channel(`follow-ups-${user.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "follow_ups",
+          },
+          () => {
+            void loadFollowUps();
+          },
+        )
+        .subscribe((status: string) => {
+          if (status === "CHANNEL_ERROR") {
+            console.error("Follow-ups Realtime subscription failed.");
+          }
+        });
+    }
+
+    void subscribeToFollowUpChanges();
+
+    return () => {
+      cancelled = true;
+
+      if (channel) {
+        void supabase.removeChannel(channel);
+      }
+    };
+  }, [loadFollowUps]);
+
   const filteredItems = useMemo(() => {
+    const query = search.toLowerCase().trim();
+
     return items.filter((item) => {
       const matchesSearch =
-        item.title.toLowerCase().includes(search.toLowerCase()) ||
-        item.contact.toLowerCase().includes(search.toLowerCase());
+        !query ||
+        item.title.toLowerCase().includes(query) ||
+        item.contact.toLowerCase().includes(query) ||
+        item.opportunity.toLowerCase().includes(query);
 
       const matchesFilter =
         filter === "All" ||
@@ -70,29 +257,119 @@ export default function FollowUpsPage() {
     });
   }, [items, search, filter]);
 
-  function addFollowUp(e: React.FormEvent<HTMLFormElement>) {
+  async function addFollowUp(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    setItems((current) => [
-      ...current,
-      {
-        id: Date.now(),
-        title,
-        contact,
-        type,
-        dueDate,
+    if (!contactId) {
+      setError("Please select a contact.");
+      return;
+    }
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setError("You must be logged in to add a follow-up.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+
+    const finalDescription = `[Type: ${type}]${
+      description.trim() ? `\n${description.trim()}` : ""
+    }`;
+
+    const { error: insertError } = await supabase
+      .from("follow_ups")
+      .insert({
+        user_id: user.id,
+        contact_id: contactId,
+        opportunity_id: opportunityId || null,
+        title: title.trim(),
+        description: finalDescription,
+        due_at: dueDate
+          ? new Date(`${dueDate}T12:00:00`).toISOString()
+          : null,
         priority,
-        completed: false,
-      },
-    ]);
+        status: "Pending",
+      });
+
+    if (insertError) {
+      setError(`Could not save follow-up: ${insertError.message}`);
+      setSaving(false);
+      return;
+    }
 
     setTitle("");
-    setContact("");
+    setContactId("");
+    setOpportunityId("");
     setType("Call");
+    setDescription("");
     setDueDate("");
     setPriority("Medium");
     setShowForm(false);
+
+    await loadFollowUps();
+
+    setSaving(false);
   }
+
+  async function toggleCompleted(item: FollowUp) {
+    const nextStatus = item.completed ? "Pending" : "Completed";
+
+    setError("");
+
+    const { error: updateError } = await supabase
+      .from("follow_ups")
+      .update({
+        status: nextStatus,
+      })
+      .eq("id", item.id);
+
+    if (updateError) {
+      setError(`Could not update follow-up: ${updateError.message}`);
+      return;
+    }
+
+    setItems((current) =>
+      current.map((entry) =>
+        entry.id === item.id
+          ? {
+              ...entry,
+              status: nextStatus,
+              completed: nextStatus === "Completed",
+            }
+          : entry
+      )
+    );
+  }
+
+  async function deleteFollowUp(item: FollowUp) {
+    const confirmed = window.confirm(
+      `Delete "${item.title}"? This cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    setError("");
+
+    const { error: deleteError } = await supabase
+      .from("follow_ups")
+      .delete()
+      .eq("id", item.id);
+
+    if (deleteError) {
+      setError(`Could not delete follow-up: ${deleteError.message}`);
+      return;
+    }
+
+    setItems((current) => current.filter((entry) => entry.id !== item.id));
+  }
+
+  const pendingCount = items.filter((item) => !item.completed).length;
+  const completedCount = items.filter((item) => item.completed).length;
 
   return (
     <WorkspacePage
@@ -112,12 +389,21 @@ export default function FollowUpsPage() {
           </div>
 
           <button
-            onClick={() => setShowForm(!showForm)}
+            onClick={() => {
+              setShowForm(!showForm);
+              setError("");
+            }}
             className="rounded-xl bg-green-700 px-4 py-3 text-sm font-semibold text-white hover:bg-green-800"
           >
             {showForm ? "Cancel" : "+ Add follow-up"}
           </button>
         </div>
+
+        {error && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
 
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="rounded-2xl border border-gray-200 bg-white p-5">
@@ -130,14 +416,14 @@ export default function FollowUpsPage() {
           <div className="rounded-2xl border border-gray-200 bg-white p-5">
             <p className="text-sm text-gray-500">Pending</p>
             <p className="mt-2 text-3xl font-semibold text-amber-600">
-              {items.filter((item) => !item.completed).length}
+              {pendingCount}
             </p>
           </div>
 
           <div className="rounded-2xl border border-gray-200 bg-white p-5">
             <p className="text-sm text-gray-500">Completed</p>
             <p className="mt-2 text-3xl font-semibold text-green-700">
-              {items.filter((item) => item.completed).length}
+              {completedCount}
             </p>
           </div>
         </div>
@@ -151,6 +437,7 @@ export default function FollowUpsPage() {
               <label className="mb-1 block text-sm font-medium text-gray-700">
                 Task title
               </label>
+
               <input
                 required
                 value={title}
@@ -162,21 +449,68 @@ export default function FollowUpsPage() {
 
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">
-                Contact name
+                Contact
               </label>
-              <input
+
+              <select
                 required
-                value={contact}
-                onChange={(e) => setContact(e.target.value)}
-                placeholder="Contact name"
-                className="w-full rounded-xl border border-gray-300 px-3 py-3 text-sm outline-none focus:border-green-700"
-              />
+                value={contactId}
+                onChange={(e) => {
+                  setContactId(e.target.value);
+                  setOpportunityId("");
+                }}
+                className="w-full rounded-xl border border-gray-300 px-3 py-3 text-sm"
+              >
+                <option value="">Select a contact</option>
+
+                {contacts.map((contact) => (
+                  <option key={contact.id} value={contact.id}>
+                    {contact.full_name}
+                    {contact.organization
+                      ? ` — ${contact.organization}`
+                      : ""}
+                  </option>
+                ))}
+              </select>
+
+              {contacts.length === 0 && (
+                <p className="mt-1 text-xs text-amber-600">
+                  Add a contact first before creating a follow-up.
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">
+                Opportunity
+              </label>
+
+              <select
+                value={opportunityId}
+                onChange={(e) => setOpportunityId(e.target.value)}
+                className="w-full rounded-xl border border-gray-300 px-3 py-3 text-sm"
+              >
+                <option value="">No opportunity</option>
+
+                {opportunities
+                  .filter(
+                    (opportunity) =>
+                      !contactId ||
+                      opportunity.contact_id === contactId
+                  )
+                  .map((opportunity) => (
+                    <option key={opportunity.id} value={opportunity.id}>
+                      {opportunity.title}
+                    </option>
+                  ))}
+              </select>
             </div>
 
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">
                 Activity type
               </label>
+
               <select
                 value={type}
                 onChange={(e) => setType(e.target.value)}
@@ -194,6 +528,7 @@ export default function FollowUpsPage() {
               <label className="mb-1 block text-sm font-medium text-gray-700">
                 Due date
               </label>
+
               <input
                 required
                 type="date"
@@ -207,6 +542,7 @@ export default function FollowUpsPage() {
               <label className="mb-1 block text-sm font-medium text-gray-700">
                 Priority
               </label>
+
               <select
                 value={priority}
                 onChange={(e) => setPriority(e.target.value)}
@@ -218,12 +554,27 @@ export default function FollowUpsPage() {
               </select>
             </div>
 
-            <div className="flex items-end">
+            <div className="sm:col-span-2">
+              <label className="mb-1 block text-sm font-medium text-gray-700">
+                Description
+              </label>
+
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={3}
+                placeholder="Add notes about this follow-up..."
+                className="w-full rounded-xl border border-gray-300 px-3 py-3 text-sm outline-none focus:border-green-700"
+              />
+            </div>
+
+            <div className="sm:col-span-2">
               <button
                 type="submit"
-                className="w-full rounded-xl bg-green-700 px-4 py-3 text-sm font-semibold text-white hover:bg-green-800"
+                disabled={saving || contacts.length === 0}
+                className="w-full rounded-xl bg-green-700 px-4 py-3 text-sm font-semibold text-white hover:bg-green-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Save follow-up
+                {saving ? "Saving..." : "Save follow-up"}
               </button>
             </div>
           </form>
@@ -233,7 +584,7 @@ export default function FollowUpsPage() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search tasks or contacts..."
+            placeholder="Search tasks, contacts or opportunities..."
             className="min-w-0 flex-1 rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm"
           />
 
@@ -249,7 +600,11 @@ export default function FollowUpsPage() {
         </div>
 
         <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white">
-          {filteredItems.length === 0 ? (
+          {loading ? (
+            <div className="p-10 text-center text-sm text-gray-500">
+              Loading follow-ups...
+            </div>
+          ) : filteredItems.length === 0 ? (
             <div className="p-10 text-center text-sm text-gray-500">
               No follow-ups found. Try another search or add a new task.
             </div>
@@ -264,15 +619,7 @@ export default function FollowUpsPage() {
                     <input
                       type="checkbox"
                       checked={item.completed}
-                      onChange={() =>
-                        setItems((current) =>
-                          current.map((entry) =>
-                            entry.id === item.id
-                              ? { ...entry, completed: !entry.completed }
-                              : entry
-                          )
-                        )
-                      }
+                      onChange={() => toggleCompleted(item)}
                       aria-label={`Mark ${item.title} completed`}
                       className="mt-1 h-4 w-4 accent-green-700"
                     />
@@ -287,11 +634,19 @@ export default function FollowUpsPage() {
                       >
                         {item.title}
                       </p>
+
                       <p className="mt-1 text-sm text-gray-500">
                         {item.contact} · {item.type}
                       </p>
+
+                      {item.opportunity && (
+                        <p className="mt-1 text-xs text-gray-500">
+                          Opportunity: {item.opportunity}
+                        </p>
+                      )}
+
                       <p className="mt-2 text-xs text-gray-500">
-                        Due: {item.dueDate || "No date"}
+                        Due: {formatDate(item.dueDate)}
                       </p>
                     </div>
                   </div>
@@ -318,6 +673,14 @@ export default function FollowUpsPage() {
                     >
                       {item.completed ? "Completed" : "Pending"}
                     </span>
+
+                    <button
+                      type="button"
+                      onClick={() => deleteFollowUp(item)}
+                      className="rounded-lg px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
+                    >
+                      Delete
+                    </button>
                   </div>
                 </div>
               ))}
@@ -326,8 +689,8 @@ export default function FollowUpsPage() {
         </div>
 
         <p className="text-xs text-gray-500">
-          Prototype data is stored in page state and resets when you refresh.
-          We can connect it to the database later.
+          Follow-ups are stored in your Supabase database and linked to your
+          existing contacts and opportunities.
         </p>
       </div>
     </WorkspacePage>

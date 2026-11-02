@@ -3,9 +3,11 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 export default function SignupPage() {
+  const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -23,7 +25,7 @@ export default function SignupPage() {
       const supabase = createClient();
 
       const { data, error } = await supabase.auth.signUp({
-        email,
+        email: email.trim(),
         password,
         options: {
           data: { full_name: name },
@@ -34,10 +36,10 @@ export default function SignupPage() {
       if (error) {
         setError(error.message);
       } else if (data.session) {
-        window.location.href = "/";
+        router.replace("/");
       } else {
         setMessage(
-          "Account created. Check your email for a confirmation link before signing in."
+          "Account created. Check your email for a confirmation link before signing in. Keep this app running while you open the link."
         );
       }
     } catch {

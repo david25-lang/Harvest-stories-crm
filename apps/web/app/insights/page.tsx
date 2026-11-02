@@ -1,65 +1,218 @@
+"use client";
 
+import { useCallback, useEffect, useMemo, useState } from "react";
 import WorkspacePage from "../components/WorkspacePage";
+import { createClient } from "@/lib/supabase/client";
 
-const metrics = [
-  {
-    title: "Opportunities",
-    value: "4",
-    detail: "Sample pipeline records",
-    color: "text-blue-700",
-    background: "bg-blue-50",
-  },
-  {
-    title: "Farm records",
-    value: "3",
-    detail: "Crop records tracked",
-    color: "text-green-700",
-    background: "bg-green-50",
-  },
-  {
-    title: "Writing projects",
-    value: "3",
-    detail: "Articles and stories",
-    color: "text-purple-700",
-    background: "bg-purple-50",
-  },
-  {
-    title: "Follow-ups",
-    value: "3",
-    detail: "Tasks to review",
-    color: "text-amber-700",
-    background: "bg-amber-50",
-  },
-];
-
-const activities = [
-  {
-    title: "Organic produce partnership",
-    category: "Opportunity",
-    description: "Review the next steps in the partnership.",
-    status: "In progress",
-  },
-  {
-    title: "The Future of Sustainable Farming",
-    category: "Writing",
-    description: "Continue drafting the farming article.",
-    status: "Draft",
-  },
-  {
-    title: "Tomatoes — Greenhouse A",
-    category: "Farming",
-    description: "Review crop progress and the expected harvest.",
-    status: "Growing",
-  },
-  {
-    title: "Discuss produce supply",
-    category: "Follow-up",
-    description: "Contact the supplier about the proposed arrangement.",
-    status: "Pending",
-  },
-];
+type Metrics = {
+  opportunities: number;
+  farming: number;
+  writing: number;
+  followUps: number;
+};
 
 export default function InsightsPage() {
+  const supabase = useMemo(() => createClient(), []);
+
+  const [metrics, setMetrics] = useState<Metrics>({
+    opportunities: 0,
+    farming: 0,
+    writing: 0,
+    followUps: 0,
+  });
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const loadInsights = useCallback(async () => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      if (!user) {
+        setError("You must be logged in to view your insights.");
+        return;
+      }
+
+      const [
+        opportunitiesResult,
+        farmingResult,
+        writingResult,
+        followUpsResult,
+      ] = await Promise.all([
+        supabase
+          .from("opportunities")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id),
+
+        supabase
+          .from("farming_records")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id),
+
+        supabase
+          .from("writing_projects")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id),
+
+        supabase
+          .from("follow_ups")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id),
+      ]);
+
+      const firstError =
+        opportunitiesResult.error ||
+        farmingResult.error ||
+        writingResult.error ||
+        followUpsResult.error;
+
+      if (firstError) {
+        throw firstError;
+      }
+
+      setMetrics({
+        opportunities: opportunitiesResult.count ?? 0,
+        farming: farmingResult.count ?? 0,
+        writing: writingResult.count ?? 0,
+        followUps: followUpsResult.count ?? 0,
+      });
+    } catch (err) {
+      console.error("Failed to load insights:", err);
+      setError("Unable to load your insights from the database.");
+    } finally {
+      setLoading(false);
+    }
+  }, [supabase]);
+
+  useEffect(() => {
+    // The initial request intentionally updates loading and error state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadInsights();
+  }, [loadInsights]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | undefined;
+
+    async function subscribeToInsightChanges() {
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
+
+      if (cancelled || error || !user) return;
+
+      channel = supabase
+        .channel(`insights-live-updates-${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "opportunities",
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          void loadInsights();
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "farming_records",
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          void loadInsights();
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "writing_projects",
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          void loadInsights();
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "follow_ups",
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          void loadInsights();
+        }
+      )
+      .subscribe((status: string, subscriptionError: Error | undefined) => {
+        if (status === "CHANNEL_ERROR") {
+          console.error(
+            "Insights Realtime subscription failed.",
+            subscriptionError,
+          );
+        }
+      });
+
+    }
+
+    void subscribeToInsightChanges();
+
+    return () => {
+      cancelled = true;
+
+      if (channel) {
+        void supabase.removeChannel(channel);
+      }
+    };
+  }, [supabase, loadInsights]);
+
+  const total =
+    metrics.opportunities +
+    metrics.farming +
+    metrics.writing +
+    metrics.followUps;
+
+  const distribution = [
+    {
+      label: "Opportunities",
+      value: metrics.opportunities,
+      color: "bg-blue-600",
+    },
+    {
+      label: "Farming",
+      value: metrics.farming,
+      color: "bg-green-600",
+    },
+    {
+      label: "Writing",
+      value: metrics.writing,
+      color: "bg-purple-600",
+    },
+    {
+      label: "Follow-ups",
+      value: metrics.followUps,
+      color: "bg-amber-500",
+    },
+  ];
+
   return (
     <WorkspacePage
       title="Insights"
@@ -67,18 +220,54 @@ export default function InsightsPage() {
       description="Review activity across your farming, writing and business relationships."
     >
       <div className="space-y-8">
+        {error && (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
         <section>
           <div>
             <h2 className="text-xl font-semibold text-gray-900">
               Business overview
             </h2>
+
             <p className="mt-1 text-sm text-gray-500">
-              A snapshot of activity across your workspace.
+              Live records from your Supabase workspace.
             </p>
           </div>
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {metrics.map((metric) => (
+            {[
+              {
+                title: "Opportunities",
+                value: metrics.opportunities,
+                detail: "Live pipeline records",
+                color: "text-blue-700",
+                background: "bg-blue-50",
+              },
+              {
+                title: "Farm records",
+                value: metrics.farming,
+                detail: "Live crop records",
+                color: "text-green-700",
+                background: "bg-green-50",
+              },
+              {
+                title: "Writing projects",
+                value: metrics.writing,
+                detail: "Live writing projects",
+                color: "text-purple-700",
+                background: "bg-purple-50",
+              },
+              {
+                title: "Follow-ups",
+                value: metrics.followUps,
+                detail: "Live follow-up records",
+                color: "text-amber-700",
+                background: "bg-amber-50",
+              },
+            ].map((metric) => (
               <div
                 key={metric.title}
                 className="rounded-2xl border border-gray-200 bg-white p-5"
@@ -96,7 +285,7 @@ export default function InsightsPage() {
                 </p>
 
                 <p className="mt-1 text-3xl font-semibold text-gray-900">
-                  {metric.value}
+                  {loading ? "..." : metric.value}
                 </p>
 
                 <p className="mt-2 text-xs text-gray-500">
@@ -114,124 +303,98 @@ export default function InsightsPage() {
             </h3>
 
             <p className="mt-1 text-sm text-gray-500">
-              Number of sample records in each module.
+              Number of records currently stored in each module.
             </p>
 
             <div className="mt-6 space-y-5">
-              {[
-                { label: "Opportunities", value: 4, width: "100%", color: "bg-blue-600" },
-                { label: "Farming", value: 3, width: "75%", color: "bg-green-600" },
-                { label: "Writing", value: 3, width: "75%", color: "bg-purple-600" },
-                { label: "Follow-ups", value: 3, width: "75%", color: "bg-amber-500" },
-              ].map((item) => (
-                <div key={item.label}>
-                  <div className="mb-2 flex justify-between text-sm">
-                    <span className="text-gray-700">{item.label}</span>
-                    <span className="font-semibold text-gray-900">
-                      {item.value}
-                    </span>
-                  </div>
+              {distribution.map((item) => {
+                const width =
+                  total > 0 ? `${(item.value / total) * 100}%` : "0%";
 
-                  <div className="h-2 overflow-hidden rounded-full bg-gray-100">
-                    <div
-                      className={`h-full rounded-full ${item.color}`}
-                      style={{ width: item.width }}
-                    />
+                return (
+                  <div key={item.label}>
+                    <div className="mb-2 flex justify-between text-sm">
+                      <span className="text-gray-700">{item.label}</span>
+
+                      <span className="font-semibold text-gray-900">
+                        {loading ? "..." : item.value}
+                      </span>
+                    </div>
+
+                    <div className="h-2 overflow-hidden rounded-full bg-gray-100">
+                      <div
+                        className={`h-full rounded-full ${item.color}`}
+                        style={{ width }}
+                      />
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
           <div className="rounded-2xl border border-gray-200 bg-white p-6">
             <h3 className="text-lg font-semibold text-gray-900">
-              Recommended next steps
+              Workspace summary
             </h3>
 
             <p className="mt-1 text-sm text-gray-500">
-              Actions to review during your next workspace session.
+              A quick view of your current workspace activity.
             </p>
 
-            <div className="mt-5 space-y-4">
-              <div className="rounded-xl bg-amber-50 p-4">
-                <p className="font-medium text-amber-900">
-                  Review pending follow-ups
-                </p>
-                <p className="mt-1 text-sm text-amber-800">
-                  Check which contacts need a call, message or meeting.
-                </p>
-              </div>
+            <div className="mt-6">
+              <p className="text-sm text-gray-500">
+                Total records
+              </p>
 
-              <div className="rounded-xl bg-green-50 p-4">
-                <p className="font-medium text-green-900">
-                  Review upcoming harvests
-                </p>
-                <p className="mt-1 text-sm text-green-800">
-                  Check crop schedules and update farming records.
-                </p>
-              </div>
+              <p className="mt-1 text-4xl font-semibold text-gray-900">
+                {loading ? "..." : total}
+              </p>
 
-              <div className="rounded-xl bg-purple-50 p-4">
-                <p className="font-medium text-purple-900">
-                  Move writing projects forward
-                </p>
-                <p className="mt-1 text-sm text-purple-800">
-                  Review drafts and upcoming publication dates.
-                </p>
-              </div>
+              <p className="mt-2 text-sm text-gray-500">
+                Combined records across opportunities, farming, writing and
+                follow-ups.
+              </p>
             </div>
+
+            <button
+              type="button"
+              onClick={loadInsights}
+              disabled={loading}
+              className="mt-6 rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loading ? "Refreshing..." : "Refresh insights"}
+            </button>
           </div>
         </section>
 
         <section>
           <div className="mb-4">
             <h3 className="text-xl font-semibold text-gray-900">
-              Activity overview
+              Data status
             </h3>
+
             <p className="mt-1 text-sm text-gray-500">
-              Example records requiring attention.
+              Insights are calculated from your authenticated Supabase data.
             </p>
           </div>
 
-          <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white">
-            <table className="w-full min-w-[650px] text-left text-sm">
-              <thead className="bg-gray-50 text-gray-500">
-                <tr>
-                  <th className="px-5 py-4 font-medium">Activity</th>
-                  <th className="px-5 py-4 font-medium">Module</th>
-                  <th className="px-5 py-4 font-medium">Details</th>
-                  <th className="px-5 py-4 font-medium">Status</th>
-                </tr>
-              </thead>
+          <div className="rounded-2xl border border-gray-200 bg-white p-6">
+            <div className="flex items-center gap-3">
+              <div className="h-3 w-3 rounded-full bg-green-500" />
 
-              <tbody className="divide-y divide-gray-100">
-                {activities.map((activity) => (
-                  <tr key={activity.title}>
-                    <td className="px-5 py-4 font-medium text-gray-900">
-                      {activity.title}
-                    </td>
-                    <td className="px-5 py-4 text-gray-600">
-                      {activity.category}
-                    </td>
-                    <td className="px-5 py-4 text-gray-600">
-                      {activity.description}
-                    </td>
-                    <td className="px-5 py-4">
-                      <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700">
-                        {activity.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+              <p className="font-medium text-gray-900">
+                Database connected
+              </p>
+            </div>
+
+            <p className="mt-2 text-sm text-gray-500">
+              The figures above are loaded for the currently signed-in user.
+              New database changes will also refresh the insights through
+              Supabase Realtime.
+            </p>
           </div>
         </section>
-
-        <p className="text-xs text-gray-500">
-          These are illustrative figures and sample activities, not live
-          database analytics. We will connect this page to real records later.
-        </p>
       </div>
     </WorkspacePage>
   );
