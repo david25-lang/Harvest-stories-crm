@@ -41,8 +41,6 @@ type Relationship = {
   notes: string;
 };
 
-const supabase = createClient();
-
 const statuses = ["Active", "Pending", "Inactive"];
 const categories = ["Farming", "Writing", "Both"];
 
@@ -74,6 +72,8 @@ function parseRelationshipNotes(rawNotes: string | null, projectName: string | n
 }
 
 export default function RelationshipsPage() {
+  const supabase = useMemo(() => createClient(), []);
+
   const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
@@ -201,13 +201,13 @@ export default function RelationshipsPage() {
     setOpportunities(loadedOpportunities);
     setRelationships(mapped);
     setLoading(false);
-  }, []);
+  }, [supabase]);
 
   useEffect(() => {
     // Load persisted records when the page opens.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadRelationships();
-  }, [loadRelationships]);
+  }, [loadRelationships, supabase]);
 
   useEffect(() => {
     let cancelled = false;
@@ -250,7 +250,7 @@ export default function RelationshipsPage() {
         void supabase.removeChannel(channel);
       }
     };
-  }, [loadRelationships]);
+  }, [loadRelationships, supabase]);
 
   const filteredRelationships = useMemo(() => {
     const term = search.toLowerCase().trim();

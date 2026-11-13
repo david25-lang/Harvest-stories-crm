@@ -42,8 +42,6 @@ type FollowUp = {
   completed: boolean;
 };
 
-const supabase = createClient();
-
 function formatDate(value: string | null) {
   if (!value) return "No date";
 
@@ -61,6 +59,8 @@ function formatDate(value: string | null) {
 }
 
 export default function FollowUpsPage() {
+  const supabase = useMemo(() => createClient(), []);
+
   const [items, setItems] = useState<FollowUp[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
@@ -187,13 +187,13 @@ export default function FollowUpsPage() {
     setOpportunities(loadedOpportunities);
     setItems(mappedFollowUps);
     setLoading(false);
-  }, []);
+  }, [supabase]);
 
   useEffect(() => {
     // The initial request intentionally updates loading and error state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadFollowUps();
-  }, [loadFollowUps]);
+  }, [loadFollowUps, supabase]);
 
   useEffect(() => {
     let cancelled = false;
@@ -236,7 +236,7 @@ export default function FollowUpsPage() {
         void supabase.removeChannel(channel);
       }
     };
-  }, [loadFollowUps]);
+  }, [loadFollowUps, supabase]);
 
   const filteredItems = useMemo(() => {
     const query = search.toLowerCase().trim();

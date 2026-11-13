@@ -15,7 +15,6 @@ type WritingItem = {
   created_at: string;
 };
 
-const supabase = createClient();
 const contentTypes = ["Article", "Story", "Newsletter", "Blog post", "Book chapter", "Other"];
 const statuses = ["Idea", "Drafting", "Editing", "Published", "On Hold"];
 
@@ -32,6 +31,8 @@ function formatDate(value: string | null) {
 }
 
 export default function WritingPage() {
+  const supabase = useMemo(() => createClient(), []);
+
   const [items, setItems] = useState<WritingItem[]>([]);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All");
@@ -75,13 +76,13 @@ export default function WritingPage() {
 
     setItems((data ?? []) as WritingItem[]);
     setLoading(false);
-  }, []);
+  }, [supabase]);
 
   useEffect(() => {
     // The initial request intentionally updates loading and error state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadItems();
-  }, [loadItems]);
+  }, [loadItems, supabase]);
   
 useEffect(() => {
   let cancelled = false;
@@ -125,7 +126,7 @@ useEffect(() => {
       void supabase.removeChannel(channel);
     }
   };
-}, [loadItems]);
+}, [loadItems, supabase]);
 
 
   const filteredItems = useMemo(() => {
