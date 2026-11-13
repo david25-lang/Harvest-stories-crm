@@ -1,7 +1,7 @@
 
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, hasSupabaseConfig } from "@/lib/supabase/server";
 import WorkspacePage from "./components/WorkspacePage";
 
 export const instant = false;
@@ -14,6 +14,10 @@ type Metric = {
 
 export default async function OverviewPage() {
   await connection();
+
+  if (!hasSupabaseConfig()) {
+    redirect("/login?error=supabase_not_configured");
+  }
 
   const supabase = await createClient();
 
